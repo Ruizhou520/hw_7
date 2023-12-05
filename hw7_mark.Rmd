@@ -1,0 +1,582 @@
+---
+title: "hw7_mark"
+author: "Ruizhou Peng"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+first load package
+
+```{r}
+library(tidyverse)
+```
+
+## 1. Maximum likelihood estimates
+
+### 1.1 Maximum likelihood estimates for Red tailed hawks
+
+we will fit a Gaussian model to a Red-tailed hawk data set
+
+```{r}
+library(Stat2Data)
+data('Hawks')
+```
+
+**q1**:
+
+extract a subset so that every Hawk belongs to the 'Red-tailed' species, along with "Weight","Tail" and "Wing" columns. The returned output is a data frame called "RedTailedDf"
+
+```{r}
+RedTailedDf <- Hawks%>%
+  filter(Species=="RT")%>%
+  select(Weight, Tail, Wing)
+
+head(RedTailedDf, 5)
+```
+
+**q2**:
+
+compute the estimates $\hat{\mu}_{MLE}$ and $\hat{\sigma}_{MLE}^2$ for tail lengths using "RedTailedDf"
+
+```{r}
+# compute MLE mean
+mean_mle <- mean(RedTailedDf$Tail, na.rm=TRUE)
+
+# compute MLE variance
+variance_mle <- sum((RedTailedDf$Tail-mean_mle)^2, na.rm=TRUE)/length(RedTailedDf$Tail)
+```
+
+**q3**:
+
+compare the fitted Gaussian model for the tail length of the red-tailed hawks with a kernel density plot
+
+```{r}
+# use dnorm to create a customised normal distribution
+# this is the density correspond to RedTailedDf tail
+fitted_gauss <- dnorm(RedTailedDf$Tail, mean=mean_mle, sd=sqrt(variance_mle))
+
+# set color in aes
+Colors <- c("Kernel"='red', "Fitted"='blue')
+ggplot()+
+  geom_density(data=select(RedTailedDf,Tail), aes(x=Tail,color='Kernel'))+
+  # use line graph to plot the fitted density
+  geom_line(data=tibble(RedTailedDf$Tail, fitted_gauss), aes(x=RedTailedDf$Tail, y=fitted_gauss,color='Fitted'))+
+  scale_color_manual(name='color', values=Colors)
+```
+
+### 1.2 Unbiased estimation of the population variance
+
+**q1**:
+
+conduct a simulation study compares the bias of $\hat{V}_{MLE}$ as an estimate to the population variance $\sigma_0^2$ with the bias of sample variance $\hat{V}_{U}$ as an estimator for the population variance $\sigma_0^2$
+
+```{r}
+# compute mle function
+mle_compute <- function(x_seq){
+  len <- length(x_seq)
+  means <- mean(x_seq, na.rm=TRUE)
+  
+  return(sum((x_seq-means)^2)/len)
+}
+
+# compute mvue function
+mvue_compute <- function(x_seq){
+  len <- length(x_seq)
+  means <- mean(x_seq, na.rm=TRUE)
+  
+  return(sum((x_seq-means)^2)/(len-1))
+}
+
+# sample sizes
+sample_size <- seq(5,100,5)
+
+# trials number
+trial_num <- 1000
+
+# sample N(1, 9)
+mu <- 1
+sigma <- 3
+
+# using "expand" to generate combination of 
+# different sample sizes and trial numbers
+mle_mvue_df <- data.frame(sample_size, trial_nums=1:trial_num)%>%
+  expand(sample_size, trial_nums)%>%
+  # sample each sequence of random variables
+  mutate(samples=map(sample_size, ~rnorm(.x, mu, sigma)))%>%
+  # compute mle and mvue
+  mutate(mle=map_dbl(samples, mle_compute),
+         mvue=map_dbl(samples, mvue_compute))%>%
+  # group by sample_size use average mle and mvue
+  select(sample_size, mle, mvue)%>%
+  group_by(sample_size)%>%
+  summarise(mle_avg=mean(mle), mvue_avg=mean(mvue))
+  
+# compute bias of mle and mvue
+bias_mle_mvue_df <- mle_mvue_df%>%
+  mutate(across(c(mle_avg,mvue_avg),~.x-sigma^2,
+                .names="{.col}_bias")
+         )
+```
+
+after getting the bias of the mle and mvue, we use line plots to show them
+
+```{r}
+# the data frame is not tidy, now tidy it longer
+bias_mle_mvue_tidy_df <- bias_mle_mvue_df%>%
+  pivot_longer(cols=c(mle_avg_bias, mvue_avg_bias),
+               names_to = 'methods',
+               values_to = 'bias')
+
+bias_mle_mvue_tidy_df%>%
+  ggplot(aes(x=sample_size, y=bias, color=methods, linetype=methods))+
+  geom_line(linewidth=1)
+```
+
+
+**q2**:
+
+yes, I think $\sqrt{\hat{V_U}} = \sqrt{\frac{1}{n-1}\sum_{i=1}^n(X_i-\overline{X})^2}$ is unbiased estimator
+
+still using the previous example, let's compute the $\sqrt{\hat{V_U}}$
+
+```{r}
+# use the previous mle_mvue_df to compute sqrt(mvue)
+bias_sqrt_mvue_df <- mle_mvue_df%>%
+  select(sample_size, mvue_avg)%>%
+  mutate(sqrt_mvue_bias=sqrt(mvue_avg)-sigma)
+
+# use line plot to show
+bias_sqrt_mvue_df%>%ggplot(aes(x=sample_size, y=sqrt_mvue_bias))+
+  geom_line(linewidth=1)+ylim(-0.5:0.5)
+```
+
+according to the plot, whenever the sample size big or small, the bias of $\sqrt{\hat{V_U}}$ is always near 0. so it is unbiased estimator for $\sigma_0$
+
+**q3**:
+
+$$
+bias_{\hat{V}_{MLE}} = \frac{1}{n}\sum_{i=1}^n (X_i-\overline{X})^2-(\mathbb{E}(X^2)-\overline{X}^2)\\
+
+bias_{\hat{V}_{MVUE}} = \frac{1}{n-1}\sum_{i=1}^n (X_i-\overline{X})^2-(\mathbb{E}(X^2)-\overline{X}^2)\\
+$$
+
+### 1.3 Maximum likelihood estimation with the Poisson distribution
+
+**q1**:
+
+suppose $X_i\in \mathbb{N}_0$, otherwise, the likelihood fnction will be 0                     
+$$
+l(\lambda)=\prod_{i=1}^n p_{\lambda}(X_i)
+\\=\prod_{i=1}^n \frac{\lambda^{X_i}e^{-\lambda}}{X_i!}
+\\=\frac{\prod_{i=1}^n\lambda^{X_i}e^{-\lambda}}{\prod_{i=1}^n X_i!}
+\\=e^{-n\lambda}\cdot\lambda^{n\cdot \overline{X}}\cdot \left( \prod_{i=1}^n \frac{1}{X_i !} \right)
+$$
+where $\overline{X}=\frac{1}{n}\sum_{i=1}^n X_i$
+
+the log-likelihood $\frac{\partial}{\partial \lambda} log\; l(\lambda)$ is:
+
+$$
+log\;l(\lambda)=(-n\lambda) + (n\cdot \overline{X})log\lambda-\sum_{i=1}^n log(X_i!)
+\\\frac{\partial}{\partial \lambda} log\; l(\lambda)=-n+\frac{n\cdot \overline{X}}{\lambda}
+$$
+
+**q2**:
+
+when $\frac{\partial}{\partial \lambda} log\; l(\lambda)=0$, it reaches its maximum point, so that $\lambda=\overline{X}$
+
+
+**q3**:
+
+conduct a simulation experiment which explore the behaviour of $\hat{\lambda}_{MLE}$, you may wish to condider a setting in which $\lambda_o=0.5$ and generate a plot of the mean squared error as a function of the sample size
+
+```{r}
+# check whether X_mean is the MLE estimator of lambda
+lambda <- 0.5
+
+# set a sample size
+sample_size <- seq(5,1000, 5)
+
+# each sample size we conduct 1000 trials
+trial_num <- 1000
+
+mle_lambda_df <- data.frame(sample_size, trial_nums=1:trial_num)%>%
+  # use expand to get combination of sample size and trials
+  expand(sample_size, trial_nums)%>%
+  # sample Poisson variables
+  mutate(samples=map(sample_size, ~rpois(.x, lambda)))%>%
+  # compute x_mean
+  mutate(x_mean = map_dbl(samples, mean))%>%
+  # compute mean square error
+  mutate(mse= map_dbl(x_mean, ~(.x-lambda)^2))%>%
+  # get the average mse based on sample sizes
+  group_by(sample_size)%>%
+  summarise(mse_avg=mean(mse))
+
+# use plot to show 
+mle_lambda_df%>%
+  ggplot(aes(x=sample_size, y=mse_avg))+geom_line(linewidth=1)
+
+```
+
+**q4**:
+
+read the **VonBortkiewicz.csv**, model the values in **fatalities** as independent random variables from a Poisson distribution with parameter $\lambda_0$ and compute the maximum likelihood estimate $\hat{\lambda}_{MLE}$ for $\lambda_0$
+
+use fitted Poisson model to give an estimate for the probability that a single cavalry corps has no fatalities due to horse kicks in a single year
+
+```{r}
+# firstly read in the csv file
+VB <- read.csv("VonBortkiewicz.csv", header=TRUE)
+
+# see fatalities as variables
+mle_lambda <- mean(VB$fatalities, na.rm = TRUE)
+
+# compute the probability that a single cavalry corps has no fatalities due to horse kicks
+
+fatalities <- 0
+prob <- dpois(fatalities, mle_lambda)
+print(paste("the probability of no fatalities is: ", round(prob*100,2), "%", sep=""))
+```
+
+**q5**:
+
+since each incident has the same probability to happen, so the probability of incident happen is $\frac{1}{n}$
+$$
+I(\lambda) = - \mathbb{E}(\frac{\partial^2}{\partial\lambda^2}log\;p_{\lambda}(X))=-\frac{1}{n}\cdot n\overline{X}\cdot\frac{(-1)}{\lambda^2}=\frac{\overline{X}}{\lambda^2}
+$$
+now sample 1000 Possion random variables with $\lambda=0.5$
+```{r}
+sample_size <- 1000
+lambda <- 0.5
+sample_pois <- rpois(sample_size, lambda)
+
+# first compute MLE_lambda
+mle_lambda <- mean(sample_pois, na.rm=TRUE)
+
+# compute sqrt(nI)(mle_lambda- lambda)
+new_variables <- sqrt(sample_size*sample_pois/lambda^2)*(mle_lambda-lambda)
+
+# give a kernel density plot
+ggplot(data=tibble(new_variables), aes(x=new_variables))+
+  geom_density()
+```
+
+### 1.4 Maximum likelihood estimation for theexponential distribution
+
+**q1**:
+
+suppose all $X_n \ge 0$ otherwise the likelihood will be 0
+
+$$
+l(\lambda) = \prod_{i=1}^n p_{\lambda}(X_i)
+\\=\lambda^n e^{-\lambda\sum_{i=1}^n Xi}
+\\log\;l(\lambda)=nlog(\lambda)-\lambda\sum_{i=1}^n Xi
+\\\frac{\partial}{\partial\lambda}log\;l(\lambda)=\frac{n}{\lambda}-\sum_{i=1}^n X_i=0
+\\\therefore \lambda=\frac{n}{\sum_{i=1}^n X_i}=\frac{1}{\overline{X}}
+$$
+
+**q2**:
+
+add a new column which gives the time in seconds until the next customer's purchase
+
+```{r}
+# read in csv
+CP <- read.csv("CustomerPurchase.csv")
+
+# add a new column compute the differ in adjacent time
+# use "lead" function to achieve this
+# lead--->find next,   lag----> find previous
+CP<- CP%>%mutate(time_diffs=lead(Time)-Time)
+
+# check
+tail(CP, 5)
+```
+
+**q3**:
+
+```{r}
+# according to question1, the mle is 1/(n*mean)
+
+# first compute the length of not none
+len <- sum(!CP%>%pull(time_diffs)%>%is.na())
+
+# compute mle
+mle_lambda <- 1/(mean(CP$time_diffs, na.rm=TRUE))
+```
+
+
+**q4**:
+
+use fitted exponential model to give an estimate of the probability of an arrival time in excess of one minute
+
+```{r}
+# estimate the probability where X >= 60 sec
+# that is, the probability of 1-p(x<60)
+
+# using distribution function, lower.tail=False means compute p>60
+prob<- pexp(60, mle_lambda, lower.tail = FALSE)
+
+print(paste("the probability of an arrival time in excess of 60 seconds is: ", round(prob*100,2), "%"))
+```
+
+
+## 2. Confidence intervals
+
+### 2.1 Student's t-confidence intervals
+
+**q1**:
+
+If the sample mean were higher, the width of the confidence interval will not change while the position will. 
+
+If the sample standard deviation were higher, the width will grow.
+
+If the sample size were higher keeping the sample standard deviation the same, the width will shrink.
+
+**q2**:
+
+extract a vector consisting of the weights of all the Red-Tailed hawks with missing values removed
+
+```{r}
+RT_Weight <- Hawks%>%filter(Species=='RT'& !is.na(Weight))%>%pull(Weight)
+```
+
+use Student's t method to compute 99%-level confidence intervals for the population mean
+
+```{r}
+# set significant level
+alpha <- 0.01
+
+sample_mean <- mean(RT_Weight, na.rm=TRUE)
+sample_sd <- sd(RT_Weight, na.rm=TRUE)
+sample_size <- length(RT_Weight)
+
+t <- qt(1-alpha/2, df=sample_size-1)
+
+# compute confidence interval
+confidence_interval_l <- sample_mean-t*sample_sd/sqrt(sample_size)
+confidence_interval_u <- sample_mean+t*sample_sd/sqrt(sample_size)
+confidence_interval <- c(confidence_interval_l, confidence_interval_u)
+
+print(confidence_interval)
+print(paste("sample mean:" ,sample_mean))
+```
+
+
+**q3**:
+
+when using student's t-distribution, it need to assume that the random variables are Gaussian random variables
+
+```{r}
+# check assumption using density plot and qqplot
+ggplot(data=tibble(RT_Weight), aes(x=RT_Weight))+geom_density()
+
+ggplot(data=tibble(RT_Weight), aes(sample=RT_Weight))+stat_qq(aes(sample=RT_Weight))+stat_qq_line(color="blue")
+```
+
+From density plot, the variables perfectly fit one modal distribution which distribute symmetrically.
+
+From qq plot, it aligns with Gaussian distribution of that mean and sd apart from a few outliers.
+
+### 2.2 Investigating coverage for Student's t intervals
+
+**q1**:
+
+```{r}
+student_t_confidence_interval <- function(sample, confidence_level){
+  # remove missing values
+  sample <- sample[!is.na(sample)]
+  
+  # size, mean and sd
+  size <- length(sample)
+  mean_t <- mean(sample, na.rm=TRUE)
+  sd_t <- sd(sample, na.rm=TRUE)
+  
+  # compute quantile
+  alpha <- 1-confidence_level
+  t <- qt(1-alpha/2, size-1)
+  
+  # compute interval
+  t_lower <- mean_t-t*sd_t/sqrt(size)
+  t_upper <- mean_t+t*sd_t/sqrt(size)
+  
+  return(c(t_lower, t_upper))
+}
+```
+
+then modify the code
+
+```{r}
+num_trials <- 10000
+sample_size <- 30
+
+mu_0 <- 1
+sigma_0 <- 3
+alpha <- 0.05
+
+set.seed(0)
+
+single_alpha_coverage_simulation_df <- data.frame(trial=seq(num_trials))%>%
+  # generate random Gaussian samples:
+  mutate(samples=map(trial, ~rnorm(sample_size, mu_0, sigma_0)))%>%
+  # generate confidence intervals:
+  mutate(ci_interval=map(samples, ~student_t_confidence_interval(.x, 1-alpha)))%>%
+  # check if interval covers mu_0, map_lgl returns a boolean:
+  mutate(cover=map_lgl(ci_interval, ~((min(.x)<=mu_0)&(max(.x)>=mu_0))))%>%
+  # compute interval length:
+  mutate(ci_length=map_dbl(ci_interval, ~(max(.x)-min(.x))))
+
+# show df
+# head(single_alpha_coverage_simulation_df, 5)
+
+# estimate of coverage probability:
+single_alpha_coverage_simulation_df%>%pull(cover)%>%
+  mean()
+```
+
+**q1**:
+
+modify the code to conduct a simulation experiment to investigate how $\mathbb{P}\{ (L_\alpha(X_1,...,X_n) \le\mu_0\le R_\alpha(X_1,...,X_n))\}$ varies as a function of the confidence level $\gamma=1-\alpha$
+
+```{r}
+num_trials <- 10000
+sample_size <- 30
+
+mu_0 <- 1
+sigma_0 <- 3
+# change alpha to a sequence
+alphas <- seq(0.05,0.95,0.05) 
+trials <- seq(num_trials)
+nrow <- length(alphas)*length(trials)
+set.seed(0)
+
+alphas_coverage_simulation_df <- 
+  # Cartesian Product different alphas with trials
+  expand.grid(trials=trials,alphas=alphas)%>%
+  # generate index
+  mutate(index=1:nrow)%>%
+  # generate random Gaussian samples:
+  mutate(samples=map(index, ~rnorm(sample_size, mu_0, sigma_0)))%>%
+  # generate confidence intervals:
+  mutate(ci_interval=map2(samples,alphas, ~student_t_confidence_interval(.x, 1-.y)))%>%
+  # check if interval covers mu_0, map_lgl returns a boolean:
+  mutate(cover=map_lgl(ci_interval, ~((min(.x)<=mu_0)&(max(.x)>=mu_0))))%>%
+  # compute interval length:
+  mutate(ci_length=map_dbl(ci_interval, ~(max(.x)-min(.x))))
+
+# compute cover rate with alphas vary
+alphas_coverage_df <- alphas_coverage_simulation_df%>%
+  # group by alpha
+  group_by(alphas)%>%
+  # compute average coverage rate
+  summarize(covers=mean(cover))
+
+# use line plot to show
+alphas_coverage_df%>%
+  ggplot(aes(x=alphas, y=covers))+geom_line(linewidth=1)
+
+```
+
+
+**q2**:
+
+explore how the average length of confidence interval vary as a function of the confidence level $\gamma=1-\alpha$
+```{r}
+ci_width_df <- alphas_coverage_simulation_df%>%
+  # group by alpha
+  group_by(alphas)%>%
+  # compute average ci width
+  summarise(widths=mean(ci_length))
+
+# use line plot to show
+ci_width_df%>%
+  ggplot(aes(x=alphas, y=widths))+geom_line(linewidth=1)
+```
+
+## 3. One sample hypothesis testing
+
+### 3.1 One sample t-test on penguins data
+
+**q1**:
+
+load the "Palmer penguins"
+```{r eval=FALSE, include=FALSE}
+install.packages("palmerpenguins")
+```
+```{r}
+# load data
+library(palmerpenguins)
+data(penguins)
+
+head(penguins)
+```
+
+extract a vector called "bill_adelie" consisting of the bill lengths which belongs to the Adelie species
+
+```{r}
+# extract vector
+bill_adelie <- penguins%>%filter(species=='Adelie')%>%
+  pull(bill_length_mm)
+```
+
+test that the population mean of the Adelie penguin's bill lengths is 40mm. Use a significance level of 0.01.
+
+```{r}
+# h0: bill_mean = 40
+# h1: bill_mean != 40
+
+# remove missing values
+bill_adelie <- bill_adelie[!is.na(bill_adelie)]
+mean_true <- 40
+confidence_level <- 0.99
+t.test(bill_adelie, mu=mean_true, conf.level = confidence_level)
+```
+
+### 3.2 Implementing a one-sample t-test
+
+**q1**:
+
+implementing a function that carries out a two-sided one-sample t-test
+
+input arguments are: 
+
+1. a vector x corresponding to a sample
+
+2. the value mu_0 corresponding to the null hypothesis
+
+the output is the p-value of the test
+
+```{r}
+t_test_implement <- function(x, mu){
+  # first compute T
+  # we need mean, variance and size
+  
+  # remove missing values
+  x <- x[!is.na(x)]
+  
+  len <- length(x)
+  mean_x <- mean(x)
+  sd_x <- sd(x)
+
+  # compute T
+  T_x <- (mean_x-mu)/(sd_x/sqrt(len))
+  
+  # compute p value
+  # p=p(|t|>T)<=alpha
+  # two-sided: P=2*(1-p(t<=T))
+  # one-sided: P=1-p(t<=T)
+  p_value <- 2*(1-pt(abs(T_x), len-1))
+  
+  return(p_value)
+}
+
+```
+
+check
+```{r}
+# check
+p_value <- t_test_implement(bill_adelie, mean_true)
+
+p_value
+```
+
+
